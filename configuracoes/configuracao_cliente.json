@@ -1,0 +1,5 @@
+{
+    "ip_roteador": "127.0.0.1",
+    "porta_roteador": 9000,
+    "requisicoes": ["amazon.com.br", "zoom.com.br"]
+}
