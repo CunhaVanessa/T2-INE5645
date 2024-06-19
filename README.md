@@ -32,11 +32,9 @@ Antes de mais nada é preciso gerar as partições onde estarão mapeadas de A-Z
 
 ### Passo 1: Iniciar os Nós de Partição
 
-Para cada partição, execute o seguinte comando em terminais separados, alterando a letra da partição e a porta conforme necessário.
+Para conectar os nós as respectivas partições utilize o comando:
 
-Exemplo para a partição 'A':
-
-`python3 dns_particionado.py particao A 9001`
+`python3 iniciar_particoes.py`
 
 ### Passo 2: Iniciar o Roteador
 
@@ -49,6 +47,10 @@ Em um novo terminal, execute:
 Em um novo terminal, execute:
 
 `python3 dns_particionado.py cliente`
+
+### Passo 4: Realizar testes
+
+`python3 teste_dns_particionado.py <num_clientes>`
 
 ### Configurações
 
@@ -67,5 +69,3 @@ Certifique-se de que todos os arquivos de configuração estejam devidamente con
 3. Configuração Baseada em Arquivos JSON: Arquivos JSON são utilizados para armazenar a configuração dos nós de partição, clientes e dados de DNS. Isso facilita a manutenção e alteração das configurações sem a necessidade de modificar o código.
 
 4. Particionamento por Letra Inicial: A escolha de particionar os dados de DNS com base na letra inicial do nome de domínio simplifica a lógica de roteamento e armazenamento, distribuindo de forma relativamente uniforme as requisições entre os nós de partição.
-
-5. Intervalo Aleatório entre Requisições: A introdução de um intervalo aleatório entre as requisições do cliente simula um comportamento mais realista de tráfego de rede, evitando sobrecarga instantânea no roteador e nos nós de partição.

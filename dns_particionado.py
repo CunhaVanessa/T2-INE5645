@@ -3,6 +3,10 @@ import threading
 import json
 import time
 import random
+import logging
+
+# Configuração de logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # ------------------- Funções de Configuração -------------------
 
@@ -18,88 +22,111 @@ def carregar_dados_dns(letra_particao):
     with open(f'particoes/particao_{letra_particao}.json', 'r') as f:
         return json.load(f)
 
-# ------------------- Funções do Roteador -------------------
+# ------------------- Funções do Roteador (API Gateway) -------------------
+
+def autenticar(token):
+    token_correto = "secreto"
+    return token == token_correto
+
+def determinar_particao(nome_dominio, particoes):
+    primeira_letra = nome_dominio[0].upper()
+    for particao, config in particoes.items():
+        if config['intervalo'][0] <= primeira_letra <= config['intervalo'][1]:
+            return config
+    return None
 
 def lidar_com_cliente(socket_cliente, particoes):
     try:
-        requisicao = socket_cliente.recv(1024).decode('utf-8')
-        nome_dominio = requisicao.strip()
-        primeira_letra = nome_dominio[0].upper()
+        requisicao, addr = socket_cliente.recvfrom(1024)
+        requisicao_decodificada = requisicao.decode('utf-8').strip().split(',')
 
-        if primeira_letra in particoes:
-            endereco_particao = particoes[primeira_letra]
-            socket_particao = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            socket_particao.connect((endereco_particao['ip'], endereco_particao['porta']))
-            print(f"Roteador redirecionando {nome_dominio} para partição {primeira_letra}")
-            socket_particao.sendall(nome_dominio.encode('utf-8'))
+        if len(requisicao_decodificada) != 2:
+            resposta = 'Formato de requisição inválido.'
+            socket_cliente.sendto(resposta.encode('utf-8'), addr)
+            logging.warning('Formato de requisição inválido: %s', requisicao)
+            return
 
-            resposta = socket_particao.recv(1024)
-            socket_cliente.sendall(resposta)
+        token, nome_dominio = requisicao_decodificada
 
-            socket_particao.close()
+        if not autenticar(token):
+            resposta = 'Autenticação falhou.'
+            socket_cliente.sendto(resposta.encode('utf-8'), addr)
+            logging.warning('Autenticação falhou para token: %s', token)
+            return
+
+        logging.info('Requisição recebida: %s', nome_dominio)
+
+        particao = determinar_particao(nome_dominio, particoes)
+        if particao:
+            ip_particao = particao['ip']
+            porta_particao = particao['porta']
+
+            socket_particao = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            mensagem = f"{nome_dominio},{addr[0]},{addr[1]}"
+            socket_particao.sendto(mensagem.encode('utf-8'), (ip_particao, porta_particao))
+
+            logging.info('Requisição encaminhada para %s: %s', nome_dominio, particao)
         else:
-            socket_cliente.sendall('Nenhuma partição disponível para esta requisição.'.encode('utf-8'))
+            resposta = 'Nenhuma partição disponível para esta requisição.'
+            socket_cliente.sendto(resposta.encode('utf-8'), addr)
+            logging.warning('Nenhuma partição disponível para %s', nome_dominio)
     except Exception as e:
-        print(f"Erro ao lidar com cliente: {e}")
-    finally:
-        socket_cliente.close()
+        logging.error('Erro ao lidar com cliente: %s', e)
 
 def iniciar_roteador(ip_roteador, porta_roteador):
     particoes = carregar_configuracao_particoes()
-    servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    servidor = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     servidor.bind((ip_roteador, porta_roteador))
-    servidor.listen(5)
-    print(f"Roteador ouvindo em {ip_roteador}:{porta_roteador}")
+    logging.info(f"Roteador ouvindo em {ip_roteador}:{porta_roteador}")
 
     while True:
-        socket_cliente, addr = servidor.accept()
-        print(f"Conexão aceita de {addr}")
-        manipulador_cliente = threading.Thread(target=lidar_com_cliente, args=(socket_cliente, particoes))
-        manipulador_cliente.start()
+        lidar_com_cliente(servidor, particoes)
 
 # ------------------- Funções do Nodo de Partição -------------------
 
 def lidar_com_requisicao(socket_cliente, dados_dns):
     try:
-        nome_dominio = socket_cliente.recv(1024).decode('utf-8').strip()
+        requisicao, addr = socket_cliente.recvfrom(1024)
+        requisicao_decodificada = requisicao.decode('utf-8').strip().split(',')
+
+        if len(requisicao_decodificada) != 3:
+            logging.warning('Formato de requisição inválido: %s', requisicao)
+            return
+
+        nome_dominio, ip_cliente, porta_cliente = requisicao_decodificada
         endereco_ip = dados_dns.get(nome_dominio, 'Domínio não encontrado')
-        print(f"Partição respondendo: {nome_dominio} -> {endereco_ip}")
-        socket_cliente.sendall(endereco_ip.encode('utf-8'))
+        logging.info(f"Partição respondendo: {nome_dominio} -> {endereco_ip}")
+        socket_cliente.sendto(endereco_ip.encode('utf-8'), (ip_cliente, int(porta_cliente)))
     except Exception as e:
-        print(f"Erro ao lidar com requisição: {e}")
-    finally:
-        socket_cliente.close()
+        logging.error(f"Erro ao lidar com requisição: %s", e)
 
 def iniciar_nodo_particao(letra_particao, ip, porta):
     dados_dns = carregar_dados_dns(letra_particao)
-    servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    servidor = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     servidor.bind((ip, porta))
-    servidor.listen(5)
-    print(f"Nó de partição {letra_particao} ouvindo em {ip}:{porta}")
+    logging.info(f"Nó de partição {letra_particao} ouvindo em {ip}:{porta}")
 
     while True:
-        socket_cliente, addr = servidor.accept()
-        print(f"Conexão aceita de {addr}")
-        manipulador_cliente = threading.Thread(target=lidar_com_requisicao, args=(socket_cliente, dados_dns))
-        manipulador_cliente.start()
+        lidar_com_requisicao(servidor, dados_dns)
 
 # ------------------- Funções do Cliente -------------------
 
 def enviar_requisicoes(ip_roteador, porta_roteador, requisicoes):
+    token = "secreto"
     for requisicao in requisicoes:
         try:
-            socket_cliente = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            socket_cliente.connect((ip_roteador, porta_roteador))
+            socket_cliente = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            mensagem = f"{token},{requisicao}"
             print(f"Cliente enviando requisição: {requisicao}")
-            socket_cliente.sendall(requisicao.encode('utf-8'))
+            socket_cliente.sendto(mensagem.encode('utf-8'), (ip_roteador, porta_roteador))
 
-            resposta = socket_cliente.recv(1024).decode('utf-8')
-            print(f"Resposta para {requisicao}: {resposta}")
+            resposta, _ = socket_cliente.recvfrom(1024)
+            resposta_decodificada = resposta.decode('utf-8')
+            print(f"Resposta para {requisicao}: {resposta_decodificada}")
 
-            socket_cliente.close()
             time.sleep(random.uniform(1, 2))
         except Exception as e:
-            print(f"Erro ao enviar requisição: {e}")
+            logging.error('Erro ao enviar requisição: %s', e)
 
 # ------------------- Execução Principal -------------------
 
@@ -108,7 +135,7 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Uso: python3 dns_particionado.py [roteador|particao|cliente]")
         sys.exit(1)
-    
+
     modo = sys.argv[1]
 
     if modo == "roteador":
@@ -131,3 +158,4 @@ if __name__ == "__main__":
         enviar_requisicoes(ip_roteador, porta_roteador, requisicoes)
     else:
         print("Modo desconhecido. Use: roteador, particao ou cliente.")
+        sys.exit(1)
